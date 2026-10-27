@@ -10,10 +10,10 @@ through $7F03/$7F04.
 Arithmetic choices
 - Field elements: 32 bytes little-endian, any value < 2^256 (2^256 = 38 mod p),
   fully reduced only for encoding/comparison.
-- fe_mul: constant-time schoolbook product by masked row additions: for
-  each of the 256 multiplier bits, (a << k) & mask is added at byte offset j.
-  Shifted copies a<<0..7 are interleaved (AKS[8*i+k]) so the inner loop uses
-  only public indices.  Reduction folds the high half with x38.
+- fe_mul: constant-time Karatsuba. A 32-byte product is three 16-byte
+  schoolbook products (public limb split) of masked row additions, with
+  carry bits applied by masks so no secret-indexed tables and no
+  secret-dependent branches. Reduction folds the high half with x38.
 - [s]B: radix-16 signed digits (branch-free recoding), 8 tables of 8 Niels
   points m*16^(8k)*B in ROM, every entry of a table scanned with masks.
 - Verification uses only public data, so it may branch on public values.
@@ -296,21 +296,106 @@ def gen_mul_family(g):
     lz = g.lab("z")
     g(f"{lz}: STZ {T64},X", "DEX", f"BPL {lz}", "RTS")
 
-    # ---- fe_mul_ct: rows of (a<<k) & mask(bit k of b_j) added at byte offset j
-    g("fe_mul_ct:", "JSR build_aks", "STZ JJ")
+    # ---- mul16: (P3) = (P1)[0:16] * (P2)[0:16], 32-byte product.
+    # Constant-time schoolbook, same masked row-add as the old 32-byte mul.
+    g("mul16:", "LDY #15")
+    l = g.lab("ld")
+    g(f"{l}: LDA (P1),Y", f"STA {W33},Y", "DEY", f"BPL {l}", f"STZ {W33 + 16}", "LDX #0")
+    lk = g.lab("k")
+    g(f"{lk}:")
+    for i in range(17):
+        g(f"LDA {W33 + i}", f"STA {AKS + 8 * i},X")
+    g(f"ASL {W33}")
+    for i in range(1, 17):
+        g(f"ROL {W33 + i}")
+    g("INX", "CPX #8")
+    loop_ne(g, lk)
+    g("LDX #31")
+    lz = g.lab("z")
+    g(f"{lz}: STZ {T64},X", "DEX", f"BPL {lz}", "STZ JJ")
     lj = g.lab("j")
     g(f"{lj}: LDY JJ", "LDA (P2),Y", "STA BJ", "LDY #0")
     lb = g.lab("b")
     g(f"{lb}: LSR BJ")
     mask_from_carry(g)
     g("STA MASK", "LDX JJ", "CLC")
-    for i in range(33):
+    for i in range(17):
         g(f"LDA {AKS + 8 * i},Y", "AND MASK", f"ADC {T64 + i},X", f"STA {T64 + i},X")
     g("INY", "CPY #8")
     loop_ne(g, lb)
-    g("INC JJ", "LDA JJ", "CMP #32")
+    g("INC JJ", "LDA JJ", "CMP #16")
     loop_ne(g, lj)
-    g("JMP reduce64")
+    g("LDY #31")
+    lc = g.lab("st")
+    g(f"{lc}: LDA {T64},Y", "STA (P3),Y", "DEY", f"BPL {lc}", "RTS")
+
+    # ---- fe_mul_ct: Karatsuba on a public 128-bit split.
+    # Scratch is the gap between the field-element arena and SHA ($1400).
+    KSCR = 0x1140
+    assert fe.next <= KSCR and KSCR + 224 <= 0x1400
+    KA0, KA1, KB0, KB1 = (KSCR + 16 * i for i in range(4))
+    KSUM, KTSUM = KSCR + 64, KSCR + 80
+    KP0, KP2, KM = KSCR + 96, KSCR + 128, KSCR + 160  # KM is 40 bytes
+    KSC, KTC, KPSAV, KPSAVH = 0x030E, 0x030F, 0x0308, 0x0309
+
+    def half(src, dst, off):
+        g(f"LDY #{off}")
+        lp = g.lab("hf")
+        g(f"{lp}: LDA ({src}),Y", f"STA {dst - off},Y", "INY", f"CPY #{off + 16}", f"BNE {lp}")
+
+    def point(zp, addr):
+        g(f"LDA #<{addr}", f"STA {zp}", f"LDA #>{addr}", f"STA {zp}+1")
+
+    def masked_add(src, flag):
+        # KM[16:] += src[0:16] if flag==1 else += 0. flag is 0 or 1.
+        g(f"LDA {flag}", "CMP #1")
+        mask_from_carry(g)
+        g("STA MASK", "CLC")
+        for i in range(16):
+            g(f"LDA {src + i}", "AND MASK", f"ADC {KM + 16 + i}", f"STA {KM + 16 + i}")
+        for i in range(32, 40):
+            g(f"LDA {KM + i}", "ADC #0", f"STA {KM + i}")
+
+    g("fe_mul_ct:", "LDA P3", f"STA {KPSAV}", "LDA P3+1", f"STA {KPSAVH}")
+    half("P1", KA0, 0)
+    half("P1", KA1, 16)
+    half("P2", KB0, 0)
+    half("P2", KB1, 16)
+    g("CLC")
+    for i in range(16):
+        g(f"LDA {KA0 + i}", f"ADC {KA1 + i}", f"STA {KSUM + i}")
+    g("LDA #0", "ADC #0", f"STA {KSC}")
+    g("CLC")
+    for i in range(16):
+        g(f"LDA {KB0 + i}", f"ADC {KB1 + i}", f"STA {KTSUM + i}")
+    g("LDA #0", "ADC #0", f"STA {KTC}")
+    point("P1", KA0); point("P2", KB0); point("P3", KP0); g("JSR mul16")
+    point("P1", KA1); point("P2", KB1); point("P3", KP2); g("JSR mul16")
+    point("P1", KSUM); point("P2", KTSUM); point("P3", KM); g("JSR mul16")
+    for i in range(32, 40):
+        g(f"STZ {KM + i}")
+    masked_add(KTSUM, KSC)
+    masked_add(KSUM, KTC)
+    g(f"LDA {KSC}", f"AND {KTC}", "CLC", f"ADC {KM + 32}", f"STA {KM + 32}")
+    for i in range(33, 40):
+        g(f"LDA {KM + i}", "ADC #0", f"STA {KM + i}")
+    for src in (KP0, KP2):
+        g("SEC")
+        for i in range(32):
+            g(f"LDA {KM + i}", f"SBC {src + i}", f"STA {KM + i}")
+        for i in range(32, 40):
+            g(f"LDA {KM + i}", "SBC #0", f"STA {KM + i}")
+    g("LDX #63")
+    lz = g.lab("tz")
+    g(f"{lz}: STZ {T64},X", "DEX", f"BPL {lz}")
+    for i in range(32):
+        g(f"LDA {KP0 + i}", f"STA {T64 + i}", f"LDA {KP2 + i}", f"STA {T64 + 32 + i}")
+    g("CLC")
+    for i in range(40):
+        g(f"LDA {KM + i}", f"ADC {T64 + 16 + i}", f"STA {T64 + 16 + i}")
+    for i in range(56, 64):
+        g(f"LDA {T64 + i}", "ADC #0", f"STA {T64 + i}")
+    g(f"LDA {KPSAV}", "STA P3", f"LDA {KPSAVH}", "STA P3+1", "JMP reduce64")
 
     # ---- fe_sq_ct: cross terms above the diagonal once, doubled, plus diagonal
     # Row j adds bit k of a_j times (A_hi(j) << k), A_hi(j) = bytes > j of a.

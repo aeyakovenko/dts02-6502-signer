@@ -129,6 +129,28 @@ Further speed needs a policy decision rather than more code tuning:
 3. **Duplicate signature.** Dropping it saves about 0.13 × 10⁹; verification already detects computation faults.
 4. **Verification against the key.** Checking [S]B = R + [k·a]B with the fixed-base tables saves about 0.1 × 10⁹. It is valid because A = [a]B was already checked against the expected key, but it uses a secret in verification.
 
+### F11 note — fixed-base verification attempt (27 Oct 2026)
+
+Attempted a safe implementation of F11 option 4 (check `[S]B = R + [k·a]B`
+via the existing fixed-base tables). **Not applied; firmware unchanged.**
+
+Reasons:
+1. `verify` uses `set_fast` (quarter-square ROM tables) because every operand
+   is public. Feeding secret `a` through that path would be a secret-indexed
+   table access on secret-influenced field elements, which Section 10.2
+   forbids. Forcing `set_ct` for the secret path would erase most of the gain.
+2. `test_verifier_rejections` requires `verify` to fail when `A_BYTES` is a
+   different public key. A `[k·a]B` check keyed only by the seed-derived
+   scalar would ignore `A_BYTES` and accept that case — a security regression.
+3. The firmware contract treats verification as public-data confirmation of
+   the signature equation against `A`.
+
+**Estimated savings (F11 figure; labeled estimate, not re-measured):** about
+0.1 × 10⁹ cycles (~15% of the 681,618,212 full flow) if the secret-in-verify
+policy were accepted. Realizable savings under Section 10.2 (constant-time
+multiply kept for secret data) would be lower. See also `CLOCK-SPEED.md`.
+
+
 The dominant costs:
 - **Field multiplication:** about 155k cycles. The 6502 has no multiply instruction, and a constant-time shift-and-add over 256 bits is the price of avoiding secret-indexed tables.
 - **Inversion:** about 41M cycles per point encoding.

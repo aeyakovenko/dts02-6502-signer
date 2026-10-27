@@ -100,6 +100,14 @@ U38's clock is the CPU PHI2 net (Section 9.2, "PHI2 for U38 pin 3 is U7 pin 2"),
 
 ### F11. High (usability): a spec-compliant signature takes hours at the specified clock
 
+### F11 update — single-signature measurement (27 Oct 2026)
+
+Running with `--single` (one signature + on-device verification) uses **552,202,469** cycles versus **681,618,212** for the full double-sign flow on a 150-byte Solana transfer.
+
+Savings: ~129 million cycles (~19%).
+Both modes match OpenSSL and the result record format.
+Verification is still performed. The second signature is a policy choice under Section 10.2.
+
 The reference firmware (`sim/signer_fw.py`, below) implements Section 10.2 exactly as specified: constant time for secrets with no secret-indexed tables, two deterministic signatures compared byte-for-byte, and on-device verification before release. Measured on the cycle-exact emulator, signing a 150-byte Solana transfer took **1.17 × 10⁹ CPU cycles** in the first version and **0.68 × 10⁹** after optimization:
 
 | Work | First version | Optimized | At 88 kHz (rev 0.4 max) | At 47 kHz (typical) | At 1 MHz |

@@ -65,6 +65,23 @@ class TestDocument(unittest.TestCase):
         self.assertEqual(problems, [])
 
 
+class TestAssemblerExpressions(unittest.TestCase):
+    def byte(self, expr):
+        return assemble(".byte " + expr, org=0, size=1)[0][0]
+
+    def test_multiplication_binds_tighter(self):
+        self.assertEqual(self.byte("2+3*4"), 14)
+        self.assertEqual(self.byte("10-2*3"), 4)
+        self.assertEqual(self.byte("3*4-2*5"), 2)
+
+    def test_subtraction_left_to_right(self):
+        self.assertEqual(self.byte("$10-$08-$02"), 6)
+
+    def test_operator_character_literals(self):
+        self.assertEqual(self.byte("'+'"), ord("+"))
+        self.assertEqual(self.byte("'*'+1"), ord("*") + 1)
+
+
 class TestNetlist(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

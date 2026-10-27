@@ -14,8 +14,9 @@ operand is known on the first pass to be below $100 and the instruction has
 a zero-page form, except that a 4-digit hex literal ($0012) forces absolute;
 the choice is frozen so both passes agree on sizes.  INC A / DEC A assemble
 to the 65C02 accumulator forms.
-Expressions: $hex, %bin, decimal, 'c', labels/constants, + - * and parentheses
-are not supported beyond <expr / >expr (low / high byte).
+Expressions: $hex, %bin, decimal, 'c', labels/constants, + - * with the
+usual precedence (* before + and -, then left to right), and a leading
+<expr / >expr (low / high byte).  Parentheses are not supported.
 
 Every operand and data value is range-checked on the final pass: values
 that do not fit their encoding raise AsmError instead of being truncated.
@@ -58,21 +59,35 @@ class Assembler:
             return self.eval(expr[1:], final) & 0xFF
         if expr.startswith(">"):
             return (self.eval(expr[1:], final) >> 8) & 0xFF
-        terms = re.split(r"(?<=[^+\-*])\s*([+\-*])\s*", expr)
-        total, op = None, "+"
-        for tok in terms:
-            if tok in "+-*":
-                op = tok
+        # Tokenise so character literals such as '+' stay intact, then apply
+        # normal precedence: * binds tighter than + and -.
+        toks = re.findall(r"'.'|[+\-*]|[^\s+\-*']+", expr)
+        if not toks:
+            raise AsmError(f"empty expression {expr!r}")
+        total, op, prod, pending = 0, "+", None, None
+        for tok in toks + ["+"]:
+            if tok in ("+", "-", "*"):
+                if prod is None:
+                    if tok == "*":
+                        raise AsmError(f"bad expression {expr!r}")
+                    op = "-" if (op == "-") != (tok == "-") else "+"
+                    continue
+                if tok == "*":
+                    pending = "*"
+                    continue
+                total += prod if op == "+" else -prod
+                prod, op = None, tok
                 continue
-            v = self.atom(tok.strip(), final)
-            if total is None:
-                total = v if op == "+" else -v
-            elif op == "+":
-                total += v
-            elif op == "-":
-                total -= v
+            v = self.atom(tok, final)
+            if pending == "*":
+                prod *= v
+                pending = None
+            elif prod is None:
+                prod = v
             else:
-                total *= v
+                raise AsmError(f"bad expression {expr!r}")
+        if pending:
+            raise AsmError(f"bad expression {expr!r}")
         return total
 
     def atom(self, tok, final):

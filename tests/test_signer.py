@@ -217,6 +217,66 @@ class TestSolanaFlow(unittest.TestCase):
                 self.assertEqual(fw.get(0x0200, 0x3E00), bytes(0x3E00))
 
 
+    def test_malformed_envelope_truncated_and_oversize(self):
+        """Adversarial: truncated / oversize envelopes must fail closed."""
+        good = F.envelope(b"m", A)
+
+        def run(env):
+            fw = Fw(double_sign=False, verify=False)
+            fw.put(F.SEED, SEED)
+            fw.put(F.ENV, env)
+            fw.call("sign_main")
+            return fw
+
+        cases = {
+            "truncated before crc": good[:-4],
+            "truncated mid header": good[:20],
+            "empty": b"",
+            "magic only": b"DTS02IN1",
+            "length 0 with junk crc": (
+                b"DTS02IN1" + bytes(2) + (0).to_bytes(2, "little") + A
+                + (0).to_bytes(4, "little")  # wrong CRC
+            ),
+        }
+        for name, env in cases.items():
+            with self.subTest(name):
+                fw = run(env)
+                self.assertEqual(fw.get(F.ZP["STATUS"], 1)[0], 0xEE)
+                self.assertEqual(fw.m.m.res_lock, 0)
+                self.assertEqual(fw.get(0x0200, 0x3E00), bytes(0x3E00))
+
+    def test_corrupted_signature_fails_full_flow_verify(self):
+        """Negative: after a good sign, flipping a SIG1 byte must make verify fail.
+
+        Confirms on-device verification is genuinely performed and rejects bad
+        signatures (OpenSSL/RFC path still matches on the uncorrupted sig).
+        """
+        msg = SOL.transfer_message(A, E.public_key(b"\x03" * 32), 42,
+                                   hashlib.sha256(b"blockhash-neg").digest())
+        fw = Fw(double_sign=False, verify=True)
+        fw.put(F.SEED, SEED)
+        fw.put(F.ENV, F.envelope(msg, A))
+        # Sign without going through sign_main so we can mutate SIG1, then verify.
+        fw.put(F.MSG, msg)
+        fw.put(F.META, len(msg).to_bytes(2, "little"))
+        fw.setp("TT", F.SCL["SIG1"])
+        fw.call("sign")
+        good = bytearray(fw.get(F.SCL["SIG1"], 64))
+        self.assertEqual(bytes(good), E.sign(SEED, msg))
+        self.assertEqual(bytes(good), SOL.openssl_sign(SEED, msg))
+        fw.call("verify")
+        self.assertEqual(fw.get(F.ZP["STATUS"], 1)[0], 0)
+        bad = bytearray(good)
+        bad[10] ^= 0x01
+        fw.put(F.SCL["SIG1"], bytes(bad))
+        fw.call("verify")
+        self.assertEqual(fw.get(F.ZP["STATUS"], 1)[0], 1)
+        # Restore and confirm still accepts the good signature.
+        fw.put(F.SCL["SIG1"], bytes(good))
+        fw.call("verify")
+        self.assertEqual(fw.get(F.ZP["STATUS"], 1)[0], 0)
+
+
 class TestGateLevel(unittest.TestCase):
     def test_signer_runs_on_board_model_to_message_lock(self):
         from sim.runner import Bench

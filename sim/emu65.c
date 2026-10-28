@@ -28,6 +28,7 @@ typedef struct {
     uint64_t trace;         /* FNV-1a over every bus address (instruction fetches,
                                operand/data reads and writes): equal traces mean
                                identical control flow and memory access patterns */
+    uint8_t io_wr_bits[32]; /* bit (addr & 0xFF) set when any $7Fxx port is written */
 } M;
 
 #define TRACE(m, a) ((m)->trace = ((m)->trace ^ (uint64_t)(a)) * 0x100000001B3ULL)
@@ -65,6 +66,7 @@ static void wr(M *m, uint16_t a, uint8_t v) {
     TRACE(m, a | 0x10000);
     if (a >= 0x8000) return;
     if (a >= 0x7F00) {
+        m->io_wr_bits[(a & 0xFF) >> 3] |= (uint8_t)(1u << (a & 7));
         switch (a & 7) {
         case 2: gpio_write(m, v); break;
         case 3: m->msg_lock = 1; break;

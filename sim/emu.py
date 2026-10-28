@@ -23,7 +23,8 @@ class M(ctypes.Structure):
                 ("last_pc", ctypes.c_uint16),
                 ("sr", ctypes.c_uint32 * 4), ("st", ctypes.c_uint32 * 4),
                 ("prev_gpio", ctypes.c_uint8),
-                ("trace", ctypes.c_uint64)]
+                ("trace", ctypes.c_uint64),
+                ("io_wr_bits", ctypes.c_uint8 * 32)]
 
 
 _lib = None

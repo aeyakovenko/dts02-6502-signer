@@ -78,6 +78,8 @@ A worst-case current estimate comes to about 340 mA. That is the 214 mA display 
 
 A3–A7 are not decoded, so a write to any mirror of $7F03 or $7F04 (for example $7F0B) sets a lock. This matches the documented mirroring and fails closed, but a stray firmware store anywhere in $7Fxx can freeze a session (`test_mirrors_and_undriven_ports`).
 
+Hygiene: `tests/test_lock_mirrors.py` statically scans the signing and diagnostic assembler sources and dynamically records every `$7Fxx` write during `sign_main` on the fast emulator. The signing firmware only stores to canonical ports (`$7F02`/`$7F03`/`$7F04`). The diagnostic ROM's sole lock-port mirror write is the intentional `$7F0B` probe in scenario `mirrors`. A negative check confirms a synthetic `$7F0B` store sets `MESSAGE_LOCK` in both the board model and the emulator.
+
 ### F9. Low: the Section 3.2 length targets can't be met with the Section 3.3 placement
 
 The generated hole-level layout (`wiring/WIRING.md`) shows the C_D and P_D length targets are unreachable with the spec's own placement:

@@ -118,3 +118,52 @@ class TestBootRomIdealBus(unittest.TestCase):
             self.fail("boot ROM did not reach the keypad menu")
         dirty = [a for a in range(0x0200, 0x4000) if mem[a]]
         self.assertEqual(dirty, [])
+
+    def test_keypad_held_key_is_recorded_once(self):
+        from sim.firmware import SCENARIOS, boot_rom
+
+        img, syms = boot_rom()
+        mem = bytearray(0x10000)
+        mem[0x8000:] = img
+        mailbox = syms["MAILBOX"]
+        mem[mailbox:mailbox + 9] = b"DTS02SIM" + bytes([SCENARIOS["keypad"]])
+        core = Core()
+        gen = core.run()
+        req = next(gen)
+        gpio = 0
+
+        def run_key(key, cycles):
+            nonlocal req, gpio
+            # Ideal keypad inputs: a single closed row/column switch. The
+            # firmware still scans all four rows through the real GPIO port.
+            for _ in range(cycles):
+                rw, addr, data, _ = req
+                if rw == "R":
+                    value = mem[addr]
+                    if 0x7F00 <= addr < 0x8000:
+                        value = 0 if (addr & 7) == 1 else 0xFF
+                        if (addr & 7) == 0 and key is not None:
+                            row, col = key
+                            if not (gpio & (1 << (2, 3, 4, 7)[row])):
+                                value &= ~(1 << col)
+                    req = gen.send(value)
+                else:
+                    if 0x7F00 <= addr < 0x8000:
+                        if (addr & 7) == 2:
+                            gpio = data
+                    elif addr < 0x7F00:
+                        mem[addr] = data
+                    req = gen.send(None)
+
+        def entered():
+            return list(mem[syms["KBUF"]:syms["KBUF"] + 16])
+
+        # Long enough for an 8-bit scan counter to wrap more than once.
+        run_key((0, 0), 350_000)                # hold "1" without releasing
+        self.assertEqual(entered(), [16] * 15 + [1])
+        run_key(None, 5_000)                   # release and debounce
+        run_key((0, 0), 30_000)                # a new press must still work
+        self.assertEqual(entered(), [16] * 14 + [1, 1])
+        run_key(None, 5_000)
+        run_key((3, 3), 350_000)                # "D" on the last row/column
+        self.assertEqual(entered(), [16] * 13 + [1, 1, 13])

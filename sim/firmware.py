@@ -646,7 +646,10 @@ kp_loop: JSR kscan
         STA KLAST
         STZ KSTAB
         JMP kp_loop
-kp_same: INC KSTAB
+kp_same: LDA KSTAB
+        CMP #3
+        BCS kp_loop             ; already handled; keep the count from wrapping
+        INC KSTAB
         LDA KSTAB
         CMP #3                  ; accept a key after 3 identical scans, once
         BNE kp_loop

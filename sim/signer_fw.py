@@ -317,41 +317,52 @@ def gen_mul_family(g):
     # Byte j+1 of that row is (a_{j+1} << k) & $FF = AKS[8(j+1)+k] & HIMASK[k];
     # bytes j+2..32 equal AKS[8i+k].  Entry into the unrolled adder depends only
     # on the public row index j.
-    g("fe_sq_ct:", "JSR build_aks", "STZ JJ")
+    #
+    # Diagonal a_j^2 is accumulated in the same bit loop (SH = a_j<<k, CT masks),
+    # so the separate 32-byte diagonal pass is only needed for j=31. Cached
+    # J8=JJ<<3 and J2=JJ<<1 cut ZP spills on the hot path.
+    J8, J2 = 0x5B, 0x5C
+    SHLO, SHHI = 0x5D, 0x5E
+    DLO, DHI = 0x5F, 0x60
+    g("fe_sq_ct:", "JSR build_aks", "STZ JJ", f"STZ {J8}", f"STZ {J2}")
+    g("LDX #63")
+    lz = g.lab("dz")
+    g(f"{lz}: STZ {DIAG},X", "DEX", f"BPL {lz}")
     lj = g.lab("sj")
-    g(f"{lj}: LDY JJ", f"LDA {A32},Y", "STA BJ", "STZ KK",
+    g(f"{lj}: LDY JJ", f"LDA {A32},Y", "STA BJ", f"STA {SHLO}", f"STZ {SHHI}",
+      f"STZ {DLO}", f"STZ {DHI}", "STZ KK",
       "LDX JJ", "LDA SQENT_LO,X", "STA ENTV", "LDA SQENT_HI,X", "STA ENTV+1")
     lb = g.lab("sb")
     g(f"{lb}: LSR BJ")
     mask_from_carry(g)
     g("STA MASK")
-    # first byte: position j+1
-    g("LDA JJ", "ASL A", "ASL A", "ASL A", "CLC", "ADC #8", "ADC KK", "TAY",
-      f"LDA {AKS},Y", "LDX KK", "AND HIMASKT,X", "AND MASK", "STA T0",
-      "LDA JJ", "ASL A", "TAX", "LDA T0", "LDY KK",           # byte j+1 of row j lands at 2j+1
-      "CLC", f"ADC {T64 + 1},X", f"STA {T64 + 1},X", "LDX JJ", "JMP (ENTV)")
+    g(f"LDA {SHLO}", "AND MASK", "CLC", f"ADC {DLO}", f"STA {DLO}",
+      f"LDA {SHHI}", "AND MASK", f"ADC {DHI}", f"STA {DHI}",
+      f"ASL {SHLO}", f"ROL {SHHI}")
+    g(f"LDA {J8}", "CLC", "ADC #8", "ADC KK", "TAY",
+      f"LDA {AKS},Y", "LDX KK", "AND HIMASKT,X", "AND MASK",
+      f"LDX {J2}", "CLC", f"ADC {T64 + 1},X", f"STA {T64 + 1},X",
+      "LDY KK", "LDX JJ", "JMP (ENTV)")
     g("sq_rows:")
     for i in range(2, 33):
         g(f"sqe{i}: LDA {AKS + 8 * i},Y", "AND MASK", f"ADC {T64 + i},X", f"STA {T64 + i},X")
     g("INC KK", "LDA KK", "CMP #8")
     loop_ne(g, lb)
-    g("INC JJ", "LDA JJ", "CMP #31")
+    g(f"LDX {J2}", f"LDA {DLO}", f"STA {DIAG},X", f"LDA {DHI}", f"STA {DIAG + 1},X",
+      "INC JJ", f"LDA {J2}", "CLC", "ADC #2", f"STA {J2}",
+      f"LDA {J8}", "CLC", "ADC #8", f"STA {J8}",
+      "LDA JJ", "CMP #31")
     loop_ne(g, lj)
-    # double the cross sum
-    g(f"ASL {T64}")
-    for i in range(1, 64):
-        g(f"ROL {T64 + i}")
-    # diagonal: DIAG[2j..2j+1] = a_j^2, constant-time shift-and-add
-    g("LDX #0")
-    ld = g.lab("dg")
-    g(f"{ld}: LDA {A32},X", "STA BJ", "STA T0", "STZ T1", "STZ T2", "STZ T3", "LDY #8")
+    g(f"LDA {A32 + 31}", "STA BJ", "STA T0", "STZ T1", "STZ T2", "STZ T3", "LDY #8")
     lq = g.lab("dq")
     g(f"{lq}: LSR BJ")
     mask_from_carry(g)
     g("STA MASK", "LDA T0", "AND MASK", "CLC", "ADC T2", "STA T2",
       "LDA T1", "AND MASK", "ADC T3", "STA T3", "ASL T0", "ROL T1", "DEY", f"BNE {lq}")
-    g("TXA", "ASL A", "TAY", "LDA T2", f"STA {DIAG},Y", "LDA T3", f"STA {DIAG + 1},Y",
-      "INX", "CPX #32", f"BNE {ld}")
+    g(f"LDA T2", f"STA {DIAG + 62}", "LDA T3", f"STA {DIAG + 63}")
+    g(f"ASL {T64}")
+    for i in range(1, 64):
+        g(f"ROL {T64 + i}")
     g("CLC")
     for i in range(64):
         g(f"LDA {T64 + i}", f"ADC {DIAG + i}", f"STA {T64 + i}")

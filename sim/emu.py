@@ -53,10 +53,15 @@ class Machine:
     def __init__(self, rom=None, image64k=None):
         self.m = M()
         if image64k is not None:
-            ctypes.memmove(self.m.mem, bytes(image64k), 65536)
+            image64k = bytes(image64k)
+            if len(image64k) != 65536:
+                raise ValueError("image64k must contain exactly 65536 bytes")
+            self.load(0, image64k)
         if rom is not None:
-            assert len(rom) == 32768
-            ctypes.memmove(ctypes.addressof(self.m.mem) + 0x8000, bytes(rom), 32768)
+            rom = bytes(rom)
+            if len(rom) != 32768:
+                raise ValueError("rom must contain exactly 32768 bytes")
+            self.load(0x8000, rom)
         self.m.switches = 0xFF
         self.m.p = 0x34
 
@@ -67,7 +72,11 @@ class Machine:
         return lib().emu_run(ctypes.byref(self.m), stop, max_cycles)
 
     def load(self, addr, data):
-        ctypes.memmove(ctypes.addressof(self.m.mem) + addr, bytes(data), len(data))
+        """Load host-provided bytes without writing outside the memory array."""
+        data = bytes(data)
+        if not 0 <= addr <= 65536 - len(data):
+            raise ValueError("load must fit within the 65536-byte address space")
+        ctypes.memmove(ctypes.addressof(self.m.mem) + addr, data, len(data))
 
     def read(self, addr, n):
         return bytes(self.m.mem[addr:addr + n])

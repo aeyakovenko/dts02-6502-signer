@@ -99,7 +99,12 @@ static void wr(M *m, uint16_t a, uint8_t v) {
     }
     if (a >= 0x4000) {
         uint8_t lock = (a & 0x2000) ? m->res_lock : m->msg_lock;
-        if (lock) { m->fault = 1; m->blocked_writes++; return; }
+        if (lock) {
+            m->fault = 1;
+            mx_reset(m);             /* FAULT removes display power independently of GPIO. */
+            m->blocked_writes++;
+            return;
+        }
     }
     if (m->fault) { m->blocked_writes++; return; }
     m->mem[a] = v;
@@ -387,6 +392,8 @@ static int step(M *m) {
 /* Reset sequence (7 cycles) as in the Python core. */
 void emu_reset(M *m) {
     if (!inited) init();
+    m->gpio = m->prev_gpio = 0;      /* CPU_RESET_N clears U16, but not the bank/fault latches. */
+    mx_reset(m);
     m->s = (uint8_t)(m->s - 3);
     m->pc = m->mem[0xFFFC] | (m->mem[0xFFFD] << 8);
     m->p = (m->p | FI | FU) & ~FD;

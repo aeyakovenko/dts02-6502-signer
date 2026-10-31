@@ -52,7 +52,7 @@ python3 -m sim wiring                       # regenerate wiring/WIRING.md + wiri
 python3 -m sim sign --lamports 5000         # sign a Solana transfer on the emulated 65C02, check vs RFC 8032 + OpenSSL
 python3 -m sim roms                         # write the prototype ROM images + SHA256SUMS to roms/
 ./tools/fetch_klaus.sh                      # optional: fetch Klaus Dormann's CPU test ROMs for tests/test_emu.py
-python3 -m unittest discover -s tests -v    # full test suite: 98 tests, about 20 minutes
+python3 -m unittest discover -s tests -v    # full test suite: 100 tests, about 20 minutes
 ```
 
 Scenarios for `run`: `idle`, `ram`, `msg_fault`, `res_fault`, `msg_frozen`, `record_ok`, `record_bad`, `mirrors`, `font` (`keypad` runs an endless key-echo loop and is driven from `tests/test_system.py`).
